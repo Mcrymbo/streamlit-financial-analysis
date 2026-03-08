@@ -6,10 +6,16 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import seaborn as sns
 from scipy import stats as scipy_stats
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+except ImportError:
+    go = None
+    make_subplots = None
 from utils import (
     inject_css, COUNTRIES, COUNTRY_BLOC, BLOCS, BLOC_COLORS,
     SCENARIOS, SCEN_COLORS, FEATURES, TARGET,
-    dark_fig, style_ax, show, guard,
+    dark_fig, style_ax, show, guard, show_plotly,
 )
 
 st.set_page_config(page_title="Monte Carlo · SSA Trade", page_icon="🎲", layout="wide")
@@ -72,6 +78,7 @@ if add_custom:
     custom_scenario = {"gdp": cg, "inf": ci, "exch": ce}
 
 if st.button("🚀  Run Monte Carlo Simulations", key="mc_run"):
+    best_name = st.session_state.get("reg_best", "")
     # Build scenario set
     scenarios = dict(SCENARIOS)
     sc_colors = dict(SCEN_COLORS)
@@ -129,10 +136,29 @@ if st.button("🚀  Run Monte Carlo Simulations", key="mc_run"):
                                            np.random.normal(0, 1.5, n)
             sim["Trade_x_GDP"]           = sim["Trade (% of GDP)_lag1"] * sim["log_GDP"]
 
-            X_sim = scaler.transform(
-                sim[FEATURES].fillna(sim[FEATURES].median())
-            )
-            preds = best_model.predict(X_sim)
+            # LSTM expects 3D (n_samples, seq_len, n_features): use base sequences with last row shocked
+            use_lstm = best_name == "LSTM" and "reg_base_sequences" in st.session_state
+            if use_lstm:
+                base_seqs = st.session_state["reg_base_sequences"]
+                seq_len = st.session_state["reg_seq_len"]
+                X_list = []
+                for country in sim["Country Name"].values:
+                    seq = base_seqs.get(country)
+                    if seq is not None:
+                        row = sim[sim["Country Name"] == country][FEATURES].fillna(sim[FEATURES].median()).values
+                        last_row = scaler.transform(row)
+                        seq_new = np.array(seq, copy=True)
+                        seq_new[-1] = last_row[0]
+                        X_list.append(seq_new)
+                    else:
+                        X_list.append(np.zeros((seq_len, len(FEATURES))))
+                X_sim_3d = np.stack(X_list)
+                preds = best_model.predict(X_sim_3d, verbose=0).flatten()
+            else:
+                X_sim = scaler.transform(
+                    sim[FEATURES].fillna(sim[FEATURES].median())
+                )
+                preds = best_model.predict(X_sim)
 
             for j, country in enumerate(sim["Country Name"].values):
                 mc[scenario][country].append(float(preds[j]))
@@ -177,23 +203,50 @@ mct1, mct2, mct3, mct4, mct5 = st.tabs([
 # ── Tab 1: Distributions ──────────────────────────────────────────────────────
 with mct1:
     st.markdown("#### Predicted Trade Volume Distribution Under Each Shock Scenario")
-    fig, axes = dark_fig(3, 3, figsize=(17, 12), constrained_layout=True)
-    fig.suptitle("Monte Carlo: Trade Volume Distribution (% of GDP)",
-                 color="#E8EAF0", fontsize=13, fontweight="bold", y=1.01)
-    for ax, country in zip(np.array(axes).flat, COUNTRIES):
-        for scenario in scenarios:
-            col  = sc_colors.get(scenario, "#AAAAAA")
-            vals = mc[scenario][country]
-            ax.hist(vals, bins=40, alpha=0.38, color=col, density=True)
-            ax.axvline(vals.mean(), color=col, lw=1.8, ls="--")
-        style_ax(ax, title=f"{country}  ({COUNTRY_BLOC[country]})",
-                 xlabel="Trade % GDP", ylabel="Density")
-    patches = [mpatches.Patch(color=sc_colors.get(s, "#AAA"), alpha=0.75, label=s)
-               for s in scenarios]
-    fig.legend(handles=patches, loc="lower center", ncol=min(len(scenarios), 5),
-               frameon=False, labelcolor="white", fontsize=9,
-               bbox_to_anchor=(0.5, -0.03))
-    show(fig)
+    st.caption("**Interactive:** hover to see counts and values. One chart per country (unchanged).")
+    if go is not None and make_subplots is not None:
+        fig_ply = make_subplots(rows=3, cols=3,
+                               subplot_titles=[f"{c}  ({COUNTRY_BLOC[c]})" for c in COUNTRIES],
+                               vertical_spacing=0.08, horizontal_spacing=0.06)
+        for idx, country in enumerate(COUNTRIES):
+            row, col = idx // 3 + 1, idx % 3 + 1
+            for si, scenario in enumerate(scenarios):
+                vals = mc[scenario][country]
+                fig_ply.add_trace(
+                    go.Histogram(x=vals, nbinsx=40, opacity=0.38, name=scenario, histnorm="probability density",
+                                 marker_color=sc_colors.get(scenario, "#AAAAAA"),
+                                 showlegend=(idx == 0),
+                                 hovertemplate="Trade % GDP: %{x:.2f}<br>Density: %{y:.3f}<extra></extra>"),
+                    row=row, col=col)
+            for scenario in scenarios:
+                mean_val = float(mc[scenario][country].mean())
+                fig_ply.add_vline(x=mean_val, row=row, col=col, line_dash="dash",
+                                  line_color=sc_colors.get(scenario, "#AAA"), line_width=1.5)
+        fig_ply.update_layout(barmode="overlay", title_text="Monte Carlo: Trade Volume Distribution (% of GDP)",
+                              paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                              margin=dict(t=60, b=80), showlegend=True,
+                              legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5))
+        fig_ply.update_xaxes(title_text="Trade % GDP", gridcolor="#1E2235")
+        fig_ply.update_yaxes(title_text="Density", gridcolor="#1E2235")
+        show_plotly(fig_ply)
+    else:
+        fig, axes = dark_fig(3, 3, figsize=(17, 12), constrained_layout=True)
+        fig.suptitle("Monte Carlo: Trade Volume Distribution (% of GDP)",
+                     color="#E8EAF0", fontsize=13, fontweight="bold", y=1.01)
+        for ax, country in zip(np.array(axes).flat, COUNTRIES):
+            for scenario in scenarios:
+                col  = sc_colors.get(scenario, "#AAAAAA")
+                vals = mc[scenario][country]
+                ax.hist(vals, bins=40, alpha=0.38, color=col, density=True)
+                ax.axvline(vals.mean(), color=col, lw=1.8, ls="--")
+            style_ax(ax, title=f"{country}  ({COUNTRY_BLOC[country]})",
+                     xlabel="Trade % GDP", ylabel="Density")
+        patches = [mpatches.Patch(color=sc_colors.get(s, "#AAA"), alpha=0.75, label=s)
+                   for s in scenarios]
+        fig.legend(handles=patches, loc="lower center", ncol=min(len(scenarios), 5),
+                   frameon=False, labelcolor="white", fontsize=9,
+                   bbox_to_anchor=(0.5, -0.03))
+        show(fig)
 
     # Key stats box
     st.markdown("**Key Statistics: Baseline vs Severe Shock**")
@@ -216,63 +269,118 @@ with mct1:
 # ── Tab 2: Heatmap ────────────────────────────────────────────────────────────
 with mct2:
     st.markdown("#### Mean Trade Volume by Scenario (% of GDP)")
-    fig, ax = dark_fig(figsize=(14, 5))
-    sns.heatmap(mc_mean, annot=True, fmt=".1f", cmap="YlOrRd_r",
-                ax=ax, linewidths=0.4,
-                annot_kws={"color": "white", "fontsize": 9},
-                cbar_kws={"label": "Mean Trade (% GDP)"})
-    style_ax(ax, title="Mean Predicted Trade Volume Under Shock Scenarios")
-    ax.tick_params(colors="#C5CAD6")
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=20, ha="right", color="#C5CAD6")
-    show(fig)
+    st.caption("**Interactive:** hover to see scenario, country, and mean value.")
+    if go is not None:
+        fig_ply = go.Figure(data=go.Heatmap(
+            z=mc_mean.values, x=mc_mean.columns.tolist(), y=mc_mean.index.tolist(),
+            colorscale="YlOrRd_r", text=np.round(mc_mean.values, 1).astype(str),
+            texttemplate="%{text}", textfont=dict(color="white", size=10),
+            hovertemplate="Scenario: %{y}<br>Country: %{x}<br>Mean: %{z:.2f} (% GDP)<extra></extra>"))
+        fig_ply.update_layout(title="Mean Predicted Trade Volume Under Shock Scenarios",
+                              paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                              xaxis=dict(tickangle=-20), yaxis=dict(autorange="reversed"),
+                              margin=dict(t=50))
+        show_plotly(fig_ply)
+    else:
+        fig, ax = dark_fig(figsize=(14, 5))
+        sns.heatmap(mc_mean, annot=True, fmt=".1f", cmap="YlOrRd_r",
+                    ax=ax, linewidths=0.4,
+                    annot_kws={"color": "white", "fontsize": 9},
+                    cbar_kws={"label": "Mean Trade (% GDP)"})
+        style_ax(ax, title="Mean Predicted Trade Volume Under Shock Scenarios")
+        ax.tick_params(colors="#C5CAD6")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=20, ha="right", color="#C5CAD6")
+        show(fig)
 
     # Bar chart
     st.markdown("#### Grouped Bar Chart")
-    fig, ax = dark_fig(figsize=(15, 6))
-    x = np.arange(len(COUNTRIES))
-    w = 0.8 / len(scenarios)
-    for i, scenario in enumerate(scenarios):
-        ax.bar(x + i * w, mc_mean.loc[scenario], width=w, label=scenario,
-               color=sc_colors.get(scenario, "#AAA"), alpha=0.85, edgecolor="#0D0F18")
-    ax.set_xticks(x + w * (len(scenarios) - 1) / 2)
-    ax.set_xticklabels(COUNTRIES, rotation=20, ha="right", color="#C5CAD6")
-    style_ax(ax, title="Mean Trade Volume by Scenario",
-             ylabel="Mean Predicted Trade (% of GDP)")
-    ax.legend(fontsize=9, facecolor="#13151F", edgecolor="#1E2235", labelcolor="white")
-    show(fig)
+    st.caption("**Interactive:** hover to see mean trade (% GDP) per scenario and country.")
+    if go is not None:
+        fig_bar = go.Figure()
+        x = np.arange(len(COUNTRIES))
+        w = 0.8 / len(scenarios)
+        for i, scenario in enumerate(scenarios):
+            fig_bar.add_trace(go.Bar(
+                x=x + i * w, y=mc_mean.loc[scenario].values, name=scenario,
+                marker_color=sc_colors.get(scenario, "#AAA"), width=w,
+                customdata=np.column_stack([COUNTRIES, [scenario] * len(COUNTRIES)]),
+                hovertemplate="Country: %{customdata[0]}<br>Scenario: %{customdata[1]}<br>Mean: %{y:.2f} (% GDP)<extra></extra>"))
+        fig_bar.update_layout(barmode="group", xaxis=dict(tickvals=x + w * (len(scenarios) - 1) / 2, ticktext=COUNTRIES, tickangle=-20),
+                              title="Mean Trade Volume by Scenario", yaxis_title="Mean Predicted Trade (% of GDP)",
+                              paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"))
+        show_plotly(fig_bar)
+    else:
+        fig, ax = dark_fig(figsize=(15, 6))
+        x = np.arange(len(COUNTRIES))
+        w = 0.8 / len(scenarios)
+        for i, scenario in enumerate(scenarios):
+            ax.bar(x + i * w, mc_mean.loc[scenario], width=w, label=scenario,
+                   color=sc_colors.get(scenario, "#AAA"), alpha=0.85, edgecolor="#0D0F18")
+        ax.set_xticks(x + w * (len(scenarios) - 1) / 2)
+        ax.set_xticklabels(COUNTRIES, rotation=20, ha="right", color="#C5CAD6")
+        style_ax(ax, title="Mean Trade Volume by Scenario",
+                 ylabel="Mean Predicted Trade (% of GDP)")
+        ax.legend(fontsize=9, facecolor="#13151F", edgecolor="#1E2235", labelcolor="white")
+        show(fig)
 
 # ── Tab 3: % Change ───────────────────────────────────────────────────────────
 with mct3:
     st.markdown("#### % Change in Trade Volume from Baseline")
     non_base = [s for s in scenarios if s != "Baseline"]
     if non_base:
-        fig, ax = dark_fig(figsize=(13, 5))
-        sns.heatmap(
-            mc_pct.loc[non_base],
-            annot=True, fmt=".1f", cmap="RdYlGn", center=0, ax=ax,
-            linewidths=0.4,
-            annot_kws={"color": "white", "fontsize": 9},
-            cbar_kws={"label": "% Change from Baseline"}
-        )
-        style_ax(ax, title="% Change in Trade Volume from Baseline")
-        ax.tick_params(colors="#C5CAD6")
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right", color="#C5CAD6")
-        show(fig)
+        st.caption("**Interactive:** hover to see scenario, country, and % change.")
+        if go is not None:
+            df_pct = mc_pct.loc[non_base]
+            fig_ply = go.Figure(data=go.Heatmap(
+                z=df_pct.values, x=df_pct.columns.tolist(), y=df_pct.index.tolist(),
+                colorscale="RdYlGn", zmid=0, text=np.round(df_pct.values, 1).astype(str),
+                texttemplate="%{text}", textfont=dict(color="white", size=10),
+                hovertemplate="Scenario: %{y}<br>Country: %{x}<br>% Change: %{z:.2f}%<extra></extra>"))
+            fig_ply.update_layout(title="% Change in Trade Volume from Baseline",
+                                 paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                                 xaxis=dict(tickangle=-30), yaxis=dict(autorange="reversed"), margin=dict(t=50))
+            show_plotly(fig_ply)
+        else:
+            fig, ax = dark_fig(figsize=(13, 5))
+            sns.heatmap(
+                mc_pct.loc[non_base],
+                annot=True, fmt=".1f", cmap="RdYlGn", center=0, ax=ax,
+                linewidths=0.4,
+                annot_kws={"color": "white", "fontsize": 9},
+                cbar_kws={"label": "% Change from Baseline"}
+            )
+            style_ax(ax, title="% Change in Trade Volume from Baseline")
+            ax.tick_params(colors="#C5CAD6")
+            ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right", color="#C5CAD6")
+            show(fig)
 
     # Most vulnerable countries
     if "Severe Shock" in mc_pct.index:
         vuln = mc_pct.loc["Severe Shock"].sort_values()
         st.markdown("**Country Vulnerability Under Severe Shock (↓ worst)**")
-        fig, ax = dark_fig(figsize=(12, 4))
-        colors  = ["#EF5350" if v < 0 else "#43A047" for v in vuln]
-        ax.barh(vuln.index, vuln, color=colors, edgecolor="#0D0F18", height=0.65)
-        ax.axvline(0, color="white", lw=0.8, ls="--", alpha=0.4)
-        for i, (country, v) in enumerate(vuln.items()):
-            ax.text(v - 0.3 if v < 0 else v + 0.1, i,
-                    f"{v:+.1f}%", va="center", ha="right" if v < 0 else "left",
-                    color="white", fontsize=9, fontweight="bold")
-        style_ax(ax, title="% Change Under Severe Shock", xlabel="% Change from Baseline")
-        show(fig)
+        st.caption("**Interactive:** hover to see country and % change.")
+        if go is not None:
+            colors = ["#EF5350" if v < 0 else "#43A047" for v in vuln]
+            fig_ply = go.Figure(data=go.Bar(y=vuln.index.tolist(), x=vuln.values, orientation="h",
+                                            marker_color=colors,
+                                            hovertemplate="%{y}: %{x:+.2f}%<extra></extra>",
+                                            text=[f"{v:+.1f}%" for v in vuln], textposition="outside", textfont=dict(color="white")))
+            fig_ply.update_layout(title="% Change Under Severe Shock", xaxis_title="% Change from Baseline",
+                                 paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                                 yaxis=dict(autorange="reversed"), margin=dict(t=50), showlegend=False)
+            fig_ply.add_vline(x=0, line_dash="dash", line_color="white", opacity=0.4)
+            show_plotly(fig_ply)
+        else:
+            fig, ax = dark_fig(figsize=(12, 4))
+            colors  = ["#EF5350" if v < 0 else "#43A047" for v in vuln]
+            ax.barh(vuln.index, vuln, color=colors, edgecolor="#0D0F18", height=0.65)
+            ax.axvline(0, color="white", lw=0.8, ls="--", alpha=0.4)
+            for i, (country, v) in enumerate(vuln.items()):
+                ax.text(v - 0.3 if v < 0 else v + 0.1, i,
+                        f"{v:+.1f}%", va="center", ha="right" if v < 0 else "left",
+                        color="white", fontsize=9, fontweight="bold")
+            style_ax(ax, title="% Change Under Severe Shock", xlabel="% Change from Baseline")
+            show(fig)
 
 # ── Tab 4: Country Deep-Dive ──────────────────────────────────────────────────
 with mct4:
@@ -280,24 +388,46 @@ with mct4:
     st.markdown(f"#### {sel_country} — Full Scenario Analysis")
 
     # Distribution overlay
-    fig, ax = dark_fig(figsize=(12, 5))
-    for scenario in scenarios:
-        vals = mc[scenario][sel_country]
-        color = sc_colors.get(scenario, "#AAA")
-        ax.hist(vals, bins=50, alpha=0.4, color=color, density=True, label=scenario)
-        ax.axvline(vals.mean(), color=color, lw=2, ls="--",
-                   label=f"{scenario}: {vals.mean():.1f}±{vals.std():.1f}")
+    st.caption("**Interactive:** hover to see density and values.")
+    if go is not None:
+        fig_ply = go.Figure()
+        for scenario in scenarios:
+            vals = mc[scenario][sel_country]
+            color = sc_colors.get(scenario, "#AAA")
+            fig_ply.add_trace(go.Histogram(x=vals, nbinsx=50, opacity=0.4, name=scenario,
+                                          marker_color=color, histnorm="probability density",
+                                          hovertemplate="Trade % GDP: %{x:.2f}<br>Density: %{y:.3f}<extra></extra>"))
+            mean_val = float(vals.mean())
+            fig_ply.add_vline(x=mean_val, line_dash="dash", line_color=color, line_width=2)
+            kde = scipy_stats.gaussian_kde(vals)
+            x_kde = np.linspace(float(vals.min()), float(vals.max()), 200)
+            fig_ply.add_trace(go.Scatter(x=x_kde, y=kde(x_kde), mode="lines", name=f"{scenario} KDE",
+                                         line=dict(color=color, width=1.5), showlegend=False,
+                                         hovertemplate="Trade % GDP: %{x:.2f}<br>KDE: %{y:.3f}<extra></extra>"))
+        fig_ply.update_layout(barmode="overlay", title=f"{sel_country} — Trade Volume Distribution",
+                              xaxis_title="Trade % GDP", yaxis_title="Density",
+                              paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                              legend=dict(orientation="h"))
+        show_plotly(fig_ply)
+    else:
+        fig, ax = dark_fig(figsize=(12, 5))
+        for scenario in scenarios:
+            vals = mc[scenario][sel_country]
+            color = sc_colors.get(scenario, "#AAA")
+            ax.hist(vals, bins=50, alpha=0.4, color=color, density=True, label=scenario)
+            ax.axvline(vals.mean(), color=color, lw=2, ls="--",
+                       label=f"{scenario}: {vals.mean():.1f}±{vals.std():.1f}")
 
-        # Add KDE
-        kde = scipy_stats.gaussian_kde(vals)
-        x_kde = np.linspace(vals.min(), vals.max(), 200)
-        ax.plot(x_kde, kde(x_kde), color=color, lw=1.5, alpha=0.8)
+            # Add KDE
+            kde = scipy_stats.gaussian_kde(vals)
+            x_kde = np.linspace(vals.min(), vals.max(), 200)
+            ax.plot(x_kde, kde(x_kde), color=color, lw=1.5, alpha=0.8)
 
-    style_ax(ax, title=f"{sel_country} — Trade Volume Distribution",
-             xlabel="Trade % GDP", ylabel="Density")
-    ax.legend(fontsize=8, facecolor="#13151F", edgecolor="#1E2235", labelcolor="white",
-              ncol=2)
-    show(fig)
+        style_ax(ax, title=f"{sel_country} — Trade Volume Distribution",
+                 xlabel="Trade % GDP", ylabel="Density")
+        ax.legend(fontsize=8, facecolor="#13151F", edgecolor="#1E2235", labelcolor="white",
+                  ncol=2)
+        show(fig)
 
     # Numerical summary table
     rows = []
@@ -320,19 +450,35 @@ with mct4:
 
     # Scenario fan chart over simulations
     st.markdown("#### Simulation Fan Chart — First 200 Draws")
-    fig, ax = dark_fig(figsize=(12, 4))
+    st.caption("**Interactive:** hover to see simulation index and predicted trade % GDP.")
     sims_to_show = min(200, len(mc["Baseline"][sel_country]))
-    for si, scenario in enumerate(scenarios):
-        vals = mc[scenario][sel_country][:sims_to_show]
-        ax.plot(range(sims_to_show), vals, ".", color=sc_colors.get(scenario, "#AAA"),
-                alpha=0.4, markersize=3)
-        ax.axhline(vals.mean(), color=sc_colors.get(scenario, "#AAA"),
-                   lw=1.8, ls="--", alpha=0.9, label=f"{scenario}: μ={vals.mean():.1f}")
-    style_ax(ax, title=f"{sel_country} — Simulation Fan Chart",
-             xlabel="Simulation #", ylabel="Predicted Trade % GDP")
-    ax.legend(fontsize=8, facecolor="#13151F", edgecolor="#1E2235", labelcolor="white",
-              ncol=2)
-    show(fig)
+    if go is not None:
+        fig_ply = go.Figure()
+        for scenario in scenarios:
+            vals = mc[scenario][sel_country][:sims_to_show]
+            color = sc_colors.get(scenario, "#AAA")
+            fig_ply.add_trace(go.Scatter(x=list(range(sims_to_show)), y=vals.tolist(), mode="markers",
+                                         name=f"{scenario}: μ={vals.mean():.1f}", marker=dict(size=4, color=color, opacity=0.5),
+                                         hovertemplate="Sim: %{x}<br>Trade % GDP: %{y:.2f}<extra></extra>"))
+            fig_ply.add_hline(y=float(vals.mean()), line_dash="dash", line_color=color, line_width=1.5)
+        fig_ply.update_layout(title=f"{sel_country} — Simulation Fan Chart",
+                              xaxis_title="Simulation #", yaxis_title="Predicted Trade % GDP",
+                              paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                              legend=dict(orientation="h"))
+        show_plotly(fig_ply)
+    else:
+        fig, ax = dark_fig(figsize=(12, 4))
+        for si, scenario in enumerate(scenarios):
+            vals = mc[scenario][sel_country][:sims_to_show]
+            ax.plot(range(sims_to_show), vals, ".", color=sc_colors.get(scenario, "#AAA"),
+                    alpha=0.4, markersize=3)
+            ax.axhline(vals.mean(), color=sc_colors.get(scenario, "#AAA"),
+                       lw=1.8, ls="--", alpha=0.9, label=f"{scenario}: μ={vals.mean():.1f}")
+        style_ax(ax, title=f"{sel_country} — Simulation Fan Chart",
+                 xlabel="Simulation #", ylabel="Predicted Trade % GDP")
+        ax.legend(fontsize=8, facecolor="#13151F", edgecolor="#1E2235", labelcolor="white",
+                  ncol=2)
+        show(fig)
 
 # ── Tab 5: Export ─────────────────────────────────────────────────────────────
 with mct5:

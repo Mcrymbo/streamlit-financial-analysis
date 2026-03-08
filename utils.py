@@ -21,6 +21,8 @@ BLOCS = {
 COUNTRY_BLOC = {c: b for b, cs in BLOCS.items() for c in cs}
 BLOC_COLORS  = {"EAC": "#1E88E5", "ECOWAS": "#FF7043", "SADC": "#43A047"}
 COUNTRY_COLOR = {c: BLOC_COLORS[COUNTRY_BLOC[c]] for c in COUNTRIES}
+# Distinct line colors for 1st / 2nd / 3rd country in bloc comparison charts (same order in every bloc)
+LINE_COLORS_3 = ["#2196F3", "#FF9800", "#4CAF50"]
 
 # Five shock scenarios used in Monte Carlo
 SCENARIOS = {
@@ -160,6 +162,21 @@ def show(fig):
     plt.tight_layout()
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
+
+
+def show_plotly(fig):
+    """Render an interactive Plotly figure (hover/click to see values)."""
+    try:
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor=BG,
+            plot_bgcolor=BG2,
+            font=dict(color=WHITE, size=11),
+            margin=dict(t=50, b=50, l=50, r=50),
+        )
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": True})
+    except Exception:
+        st.plotly_chart(fig, width="stretch")
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────────

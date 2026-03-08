@@ -9,10 +9,16 @@ from sklearn.cluster import KMeans, DBSCAN
 from sklearn.metrics import silhouette_score, davies_bouldin_score
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+except ImportError:
+    go = None
+    make_subplots = None
 from utils import (
     inject_css, COUNTRIES, COUNTRY_BLOC, BLOCS, BLOC_COLORS,
     CLUSTER_FEATS, CLUSTER_PAL,
-    dark_fig, style_ax, show, guard,
+    dark_fig, style_ax, show, guard, show_plotly,
 )
 
 st.set_page_config(page_title="Clustering · SSA Trade", page_icon="🗂️", layout="wide")
@@ -52,6 +58,7 @@ Xc = sc.fit_transform(country_agg)
 
 # ── K-selection plots ─────────────────────────────────────────────────────────
 st.markdown("### Optimal K Selection")
+st.caption("**Interactive:** hover to see K and metric value. Four panels unchanged.")
 inertias, silhouettes, db_scores, ch_scores = [], [], [], []
 from sklearn.metrics import calinski_harabasz_score
 
@@ -65,21 +72,44 @@ for k in range(2, k_max + 1):
 
 best_k = 2 + int(np.argmax(silhouettes))
 
-fig, axes = dark_fig(1, 4, figsize=(18, 4))
-plot_data = [
-    ("Elbow — Inertia ↓",       inertias,    "#42A5F5", "bo-"),
-    ("Silhouette Score ↑",       silhouettes, "#66BB6A", "gs-"),
-    ("Davies-Bouldin Index ↓",   db_scores,   "#EF5350", "r^-"),
-    ("Calinski-Harabasz ↑",      ch_scores,   "#FFA726", "D-"),
-]
-for ax, (title, vals, col, mk) in zip(axes, plot_data):
-    ax.plot(range(2, k_max + 1), vals, mk, lw=2, markersize=8, color=col)
-    ax.axvline(best_k, color="#FDD835", lw=1.5, ls="--", alpha=0.8)
-    style_ax(ax, title=title, xlabel="K")
-    ax.text(best_k + 0.05, ax.get_ylim()[1] * 0.95,
-            f"K={best_k}", color="#FDD835", fontsize=9, fontweight="bold")
-fig.suptitle("K-Selection Metrics", color="#E8EAF0", fontsize=12, fontweight="bold")
-show(fig)
+if go is not None and make_subplots is not None:
+    k_vals = list(range(2, k_max + 1))
+    plot_data = [
+        ("Elbow — Inertia ↓",     inertias,    "#42A5F5"),
+        ("Silhouette Score ↑",    silhouettes, "#66BB6A"),
+        ("Davies-Bouldin Index ↓", db_scores,  "#EF5350"),
+        ("Calinski-Harabasz ↑",   ch_scores,   "#FFA726"),
+    ]
+    fig_ply = make_subplots(rows=1, cols=4, subplot_titles=[t for t, _, _ in plot_data],
+                            horizontal_spacing=0.06)
+    for col, (title, vals, color) in enumerate(plot_data, 1):
+        fig_ply.add_trace(
+            go.Scatter(x=k_vals, y=vals, mode="lines+markers", line=dict(color=color, width=2),
+                       marker=dict(size=8), showlegend=False,
+                       hovertemplate="K: %{x}<br>Value: %{y:.4f}<extra></extra>"),
+            row=1, col=col)
+        fig_ply.add_vline(x=best_k, row=1, col=col, line_dash="dash", line_color="#FDD835", line_width=1.5)
+    fig_ply.update_layout(title_text="K-Selection Metrics", paper_bgcolor="#0D0F18", plot_bgcolor="#13151F",
+                         font=dict(color="#E8EAF0"), margin=dict(t=60))
+    fig_ply.update_xaxes(title_text="K", gridcolor="#1E2235")
+    fig_ply.update_yaxes(gridcolor="#1E2235")
+    show_plotly(fig_ply)
+else:
+    fig, axes = dark_fig(1, 4, figsize=(18, 4))
+    plot_data = [
+        ("Elbow — Inertia ↓",       inertias,    "#42A5F5", "bo-"),
+        ("Silhouette Score ↑",       silhouettes, "#66BB6A", "gs-"),
+        ("Davies-Bouldin Index ↓",   db_scores,   "#EF5350", "r^-"),
+        ("Calinski-Harabasz ↑",      ch_scores,   "#FFA726", "D-"),
+    ]
+    for ax, (title, vals, col, mk) in zip(axes, plot_data):
+        ax.plot(range(2, k_max + 1), vals, mk, lw=2, markersize=8, color=col)
+        ax.axvline(best_k, color="#FDD835", lw=1.5, ls="--", alpha=0.8)
+        style_ax(ax, title=title, xlabel="K")
+        ax.text(best_k + 0.05, ax.get_ylim()[1] * 0.95,
+                f"K={best_k}", color="#FDD835", fontsize=9, fontweight="bold")
+    fig.suptitle("K-Selection Metrics", color="#E8EAF0", fontsize=12, fontweight="bold")
+    show(fig)
 
 km1, km2, km3, km4 = st.columns(4)
 km1.metric("Optimal K",     best_k,                       "by Silhouette")
@@ -124,33 +154,61 @@ st.session_state.update({
 # ── Side-by-side PCA plots ────────────────────────────────────────────────────
 st.markdown("### Cluster Visualisation (PCA 2D Projection)")
 st.caption(f"PC1 explains {pca.explained_variance_ratio_[0]*100:.1f}% variance, "
-           f"PC2 explains {pca.explained_variance_ratio_[1]*100:.1f}%")
+           f"PC2 explains {pca.explained_variance_ratio_[1]*100:.1f}%. **Interactive:** hover to see country, PC1, PC2, and cluster.")
 
-fig, axes = dark_fig(1, 2, figsize=(16, 7))
-for ax, col_label, title in zip(
-    axes,
-    ["KMeans_Cluster", "DBSCAN_Cluster"],
-    [f"K-Means  K={best_k}  Sil={sil_km:.3f}  DB={db_km:.3f}  CH={ch_km:.1f}",
-     f"DBSCAN  ε={eps_val}  {n_db_clusters} clusters  {n_noise} noise pts"]
-):
-    for label in sorted(country_agg[col_label].unique()):
-        sub   = country_agg[country_agg[col_label] == label]
-        color = "#888888" if label == -1 else CLUSTER_PAL[label % len(CLUSTER_PAL)]
-        lbl   = "Noise" if label == -1 else f"Cluster {label + 1}"
-        ax.scatter(sub["PC1"], sub["PC2"], c=color, s=220,
-                   label=lbl, zorder=3, edgecolors="white", lw=1.5)
-        for c_name, row in sub.iterrows():
-            ax.annotate(
-                c_name, (row["PC1"], row["PC2"]),
-                fontsize=9, ha="center", va="bottom",
-                xytext=(0, 12), textcoords="offset points",
-                fontweight="bold", color="white"
-            )
-    style_ax(ax, title=title,
-             xlabel=f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)",
-             ylabel=f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
-    ax.legend(fontsize=9, facecolor="#13151F", edgecolor="#1E2235", labelcolor="white")
-show(fig)
+pc1_pct = pca.explained_variance_ratio_[0] * 100
+pc2_pct = pca.explained_variance_ratio_[1] * 100
+
+if go is not None and make_subplots is not None:
+    titles = [
+        f"K-Means  K={best_k}  Sil={sil_km:.3f}  DB={db_km:.3f}  CH={ch_km:.1f}",
+        f"DBSCAN  ε={eps_val}  {n_db_clusters} clusters  {n_noise} noise pts"
+    ]
+    fig_ply = make_subplots(rows=1, cols=2, subplot_titles=titles, horizontal_spacing=0.08)
+    for col, (col_label, title) in enumerate(zip(["KMeans_Cluster", "DBSCAN_Cluster"], titles), 1):
+        for label in sorted(country_agg[col_label].unique()):
+            sub = country_agg[country_agg[col_label] == label]
+            color = "#888888" if label == -1 else CLUSTER_PAL[int(label) % len(CLUSTER_PAL)]
+            lbl = "Noise" if label == -1 else f"Cluster {int(label) + 1}"
+            fig_ply.add_trace(
+                go.Scatter(
+                    x=sub["PC1"], y=sub["PC2"], mode="markers+text", name=lbl,
+                    text=sub.index.tolist(), textposition="top center", textfont=dict(size=10, color="white"),
+                    marker=dict(size=14, color=color, line=dict(width=1.5, color="white")),
+                    hovertemplate="Country: %{text}<br>PC1: %{x:.3f}<br>PC2: %{y:.3f}<br>" + lbl + "<extra></extra>",
+                    showlegend=True),
+                row=1, col=col)
+    fig_ply.update_layout(paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                          margin=dict(t=60), legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    fig_ply.update_xaxes(title_text=f"PC1 ({pc1_pct:.1f}%)", gridcolor="#1E2235")
+    fig_ply.update_yaxes(title_text=f"PC2 ({pc2_pct:.1f}%)", gridcolor="#1E2235")
+    show_plotly(fig_ply)
+else:
+    fig, axes = dark_fig(1, 2, figsize=(16, 7))
+    for ax, col_label, title in zip(
+        axes,
+        ["KMeans_Cluster", "DBSCAN_Cluster"],
+        [f"K-Means  K={best_k}  Sil={sil_km:.3f}  DB={db_km:.3f}  CH={ch_km:.1f}",
+         f"DBSCAN  ε={eps_val}  {n_db_clusters} clusters  {n_noise} noise pts"]
+    ):
+        for label in sorted(country_agg[col_label].unique()):
+            sub   = country_agg[country_agg[col_label] == label]
+            color = "#888888" if label == -1 else CLUSTER_PAL[label % len(CLUSTER_PAL)]
+            lbl   = "Noise" if label == -1 else f"Cluster {label + 1}"
+            ax.scatter(sub["PC1"], sub["PC2"], c=color, s=220,
+                       label=lbl, zorder=3, edgecolors="white", lw=1.5)
+            for c_name, row in sub.iterrows():
+                ax.annotate(
+                    c_name, (row["PC1"], row["PC2"]),
+                    fontsize=9, ha="center", va="bottom",
+                    xytext=(0, 12), textcoords="offset points",
+                    fontweight="bold", color="white"
+                )
+        style_ax(ax, title=title,
+                 xlabel=f"PC1 ({pc1_pct:.1f}%)",
+                 ylabel=f"PC2 ({pc2_pct:.1f}%)")
+        ax.legend(fontsize=9, facecolor="#13151F", edgecolor="#1E2235", labelcolor="white")
+    show(fig)
 
 st.divider()
 

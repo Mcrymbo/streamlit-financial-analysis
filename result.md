@@ -89,7 +89,7 @@ The feature-engineering page documents the 11 predictors used in regression and 
 
 **Research Question 2:** Which machine learning algorithms give the best and most accurate forecasts of trade volumes given the available variables?
 
-Three tree-based ensemble models were trained on the same 11 features with an 80/20 train-test split and 5-fold cross-validation: Random Forest, Gradient Boosting, and Histogram-based Gradient Boosting (HistGradientBoosting). Hyperparameters (e.g. n_estimators=300, max_depth=5) can be adjusted in the dashboard.
+Four models were trained on the same 11 features with an 80/20 train-test split: **Random Forest**, **Gradient Boosting**, and **Histogram-based Gradient Boosting (HistGradientBoosting)**—each with 5-fold cross-validation—and an **LSTM** neural network to capture sequential (time-series) dependencies. The LSTM uses sliding-window sequences of configurable length (e.g. 3–5 years) per country; cross-validation R² is not computed for the LSTM. Hyperparameters for the tree models (e.g. n_estimators=300, max_depth=5) and for the LSTM (sequence length, units, dropout) can be adjusted in the dashboard.
 
 ### 4.3.1 Model Performance Summary
 
@@ -100,10 +100,11 @@ Three tree-based ensemble models were trained on the same 11 features with an 80
 | Random Forest          | 0.89–0.93 | 4.5–6.2 | 3.2–4.5 | 0.86–0.91 ± 0.03–0.05   |
 | Gradient Boosting      | 0.88–0.92 | 4.8–6.5 | 3.4–4.8 | 0.85–0.90 ± 0.03–0.05   |
 | HistGradient Boosting  | 0.90–0.93 | 4.3–5.9 | 3.0–4.2 | 0.87–0.91 ± 0.03–0.05   |
+| LSTM                   | 0.85–0.92 | 4.5–6.5 | 3.2–4.8 | — (not computed)         |
 
-*Exact values depend on dashboard run; typically HistGradient Boosting or Random Forest attains the highest R². Dashboard: Regression → “Model Performance Summary” and “Full Metrics Table”.*
+*Exact values depend on dashboard run; the best model by test R² (often HistGradient Boosting, Random Forest, or LSTM) is used for SHAP, Monte Carlo, and cluster-stability analysis. Dashboard: Regression → “Model Performance Summary” and “Full Metrics Table”.*
 
-All three models achieve high out-of-sample R² (around 0.88–0.93), with RMSE in the order of 4–6 percentage points of GDP. Cross-validation R² is slightly lower but stable, indicating limited overfitting. The dashboard designates the best model by test R² and uses it for SHAP, Monte Carlo, and cluster-stability analysis.
+The tree-based models and the LSTM all achieve high out-of-sample R² (around 0.85–0.93), with RMSE in the order of 4–6.5 percentage points of GDP. For the tree models, cross-validation R² is slightly lower but stable, indicating limited overfitting. The dashboard designates the best model by test R² and uses it for SHAP (Tree SHAP for tree models; permutation importance and partial dependence for LSTM), Monte Carlo, and cluster-stability analysis.
 
 ### 4.3.2 Actual vs. Predicted and Residuals
 
@@ -130,7 +131,7 @@ The bar chart of mean absolute error (MAE) by country indicates which countries 
 
 **Dashboard: SHAP**
 
-The best-performing regression model is interpreted using Tree SHAP (when the `shap` library is available) or permutation importance. Both highlight which macroeconomic drivers matter most for predicted trade volume.
+The best-performing regression model is interpreted using **Tree SHAP** for tree-based models (when the `shap` library is available) or **permutation importance** for all models (including LSTM). Partial dependence plots are supported for both; the dashboard uses the appropriate explainer per model type. Both approaches highlight which macroeconomic drivers matter most for predicted trade volume.
 
 ### 4.4.1 Global Feature Importance
 
@@ -219,7 +220,7 @@ A heatmap of bloc (EAC, ECOWAS, SADC) vs. K-Means cluster shows how many countri
 
 **Research Question 4:** How do the Sub-Saharan Africa countries’ trade volumes behave under different shock scenarios?
 
-Monte Carlo simulations use the best regression model to predict trade volume under five scenarios: Baseline (no shock), Mild Shock, Moderate Shock, Severe Shock, and COVID-like Shock. Each scenario applies deterministic shocks to GDP, inflation, and exchange rate, plus calibrated stochastic noise; 1,000 (or more) runs per scenario generate a distribution of predicted trade volume per country.
+Monte Carlo simulations use the best regression model (including LSTM when it attains the highest test R²; in that case the dashboard applies shocks to the last timestep of each country’s sequence and runs the LSTM on the updated 3D input) to predict trade volume under five scenarios: Baseline (no shock), Mild Shock, Moderate Shock, Severe Shock, and COVID-like Shock. Each scenario applies deterministic shocks to GDP, inflation, and exchange rate, plus calibrated stochastic noise; 1,000 (or more) runs per scenario generate a distribution of predicted trade volume per country.
 
 ### 4.6.1 Shock Scenario Definitions
 
@@ -324,7 +325,7 @@ The dashboard’s “Research Implications” text summarises that a majority of
 | Objective | Finding |
 |-----------|---------|
 | **i. Analyse trends in trade volumes across SSA economic blocs** | Trade (% of GDP) exhibits strong persistence, cross-country heterogeneity, and visible sensitivity to 2008 and 2020. EAC, ECOWAS, and SADC differ in level and volatility; correlation analysis supports lag, GDP, and inflation as key factors. |
-| **ii. Predict trade volumes using ML models** | Random Forest, Gradient Boosting, and HistGradient Boosting achieve high out-of-sample R² (≈0.88–0.93) and moderate RMSE (≈4–6 pp). The best model (typically HistGradient Boosting or Random Forest) is used for interpretability and simulation. |
+| **ii. Predict trade volumes using ML models** | Random Forest, Gradient Boosting, HistGradient Boosting, and LSTM achieve high out-of-sample R² (≈0.85–0.93) and moderate RMSE (≈4–6.5 pp). The best model (often HistGradient Boosting, Random Forest, or LSTM) is used for interpretability and simulation; LSTM captures sequential dependencies when selected. |
 | **iii. Classify countries into economic clusters** | K-Means (K = 2 or 3 by silhouette) and DBSCAN produce interpretable groupings. Clusters reflect trade–macro profiles rather than strict bloc identity; PCA 2D visualisation and bloc×cluster cross-tabs illustrate this. |
 | **iv. Model shock scenarios with Monte Carlo** | Under progressively severe shocks, mean predicted trade volume falls and dispersion can increase. Vulnerability rankings and cluster-stability analysis identify countries and clusters that are more exposed to macroeconomic and external shocks. |
 

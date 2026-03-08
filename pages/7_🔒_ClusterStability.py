@@ -5,10 +5,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import seaborn as sns
+try:
+    import plotly.graph_objects as go
+except ImportError:
+    go = None
 from utils import (
     inject_css, COUNTRIES, COUNTRY_BLOC, BLOC_COLORS, BLOCS,
     CLUSTER_FEATS, CLUSTER_PAL,
-    dark_fig, style_ax, show, guard,
+    dark_fig, style_ax, show, guard, show_plotly,
 )
 
 st.set_page_config(page_title="Cluster Stability · SSA Trade", page_icon="🔒", layout="wide")
@@ -82,37 +86,60 @@ st.divider()
 # ── Stability Heatmap ─────────────────────────────────────────────────────────
 st.markdown("### Cluster Assignment Heatmap")
 st.caption("Each cell = cluster assigned under that shock scenario. "
-           "Red border = at least one cluster shift detected.")
+           "Red border = at least one cluster shift detected. **Interactive:** hover to see country, scenario, and cluster.")
 
 hmap_data = pivot.drop(columns="Stable?").astype(int)
 cmap      = mcolors.ListedColormap(CLUSTER_PAL[:best_k])
 
-fig, ax = dark_fig(figsize=(15, 6))
-sns.heatmap(
-    hmap_data, annot=True, fmt="d", cmap=cmap, ax=ax,
-    linewidths=0.8, linecolor="#0D0F18",
-    vmin=1, vmax=best_k,
-    annot_kws={"color": "white", "fontsize": 12, "fontweight": "bold"},
-    cbar_kws={"label": "Cluster", "ticks": list(range(1, best_k + 1))}
-)
-# Bloc labels on left
-for i, country in enumerate(hmap_data.index):
-    bloc = COUNTRY_BLOC[country]
-    ax.text(-0.25, i + 0.5, bloc, ha="right", va="center",
-            fontsize=9, color=BLOC_COLORS[bloc], fontweight="bold",
-            transform=ax.get_yaxis_transform())
-# Red borders for unstable countries
-for i, country in enumerate(hmap_data.index):
-    if country in unstable:
-        ax.add_patch(plt.Rectangle(
-            (0, i), len(scenarios), 1,
-            fill=False, edgecolor="#EF5350", lw=3.5, zorder=5
-        ))
-style_ax(ax, title="Cluster Stability Across Shock Scenarios  (red border = shift)",
-         xlabel="Shock Scenario", ylabel="Country")
-ax.set_xticklabels(ax.get_xticklabels(), rotation=20, ha="right", color="#C5CAD6")
-ax.tick_params(colors="#C5CAD6")
-show(fig)
+if go is not None:
+    # Discrete colors for clusters 1..best_k
+    z = hmap_data.values
+    if best_k <= 1:
+        scale = [[0, CLUSTER_PAL[0]], [1, CLUSTER_PAL[0]]]
+    else:
+        scale = [[(i - 1) / (best_k - 1), CLUSTER_PAL[(i - 1) % len(CLUSTER_PAL)]] for i in range(1, best_k + 1)]
+    fig_ply = go.Figure(data=go.Heatmap(
+        z=z, x=hmap_data.columns.tolist(), y=hmap_data.index.tolist(),
+        colorscale=scale,
+        text=z.astype(int).astype(str), texttemplate="%{text}", textfont=dict(color="white", size=12, family="bold"),
+        hovertemplate="Country: %{y}<br>Scenario: %{x}<br>Cluster: %{z}<extra></extra>",
+        zmin=1, zmax=best_k))
+    shapes = []
+    for i, country in enumerate(hmap_data.index):
+        if country in unstable:
+            shapes.append(dict(type="rect", x0=-0.5, x1=len(scenarios) - 0.5, y0=i - 0.5, y1=i + 0.5,
+                               line=dict(color="#EF5350", width=3), fillcolor="rgba(0,0,0,0)"))
+    fig_ply.update_layout(title="Cluster Stability Across Shock Scenarios  (red border = shift)",
+                          xaxis_title="Shock Scenario", yaxis_title="Country",
+                          paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                          xaxis=dict(tickangle=-20), yaxis=dict(autorange="reversed"),
+                          margin=dict(t=50), shapes=shapes)
+    show_plotly(fig_ply)
+else:
+    fig, ax = dark_fig(figsize=(15, 6))
+    sns.heatmap(
+        hmap_data, annot=True, fmt="d", cmap=cmap, ax=ax,
+        linewidths=0.8, linecolor="#0D0F18",
+        vmin=1, vmax=best_k,
+        annot_kws={"color": "white", "fontsize": 12, "fontweight": "bold"},
+        cbar_kws={"label": "Cluster", "ticks": list(range(1, best_k + 1))}
+    )
+    for i, country in enumerate(hmap_data.index):
+        bloc = COUNTRY_BLOC[country]
+        ax.text(-0.25, i + 0.5, bloc, ha="right", va="center",
+                fontsize=9, color=BLOC_COLORS[bloc], fontweight="bold",
+                transform=ax.get_yaxis_transform())
+    for i, country in enumerate(hmap_data.index):
+        if country in unstable:
+            ax.add_patch(plt.Rectangle(
+                (0, i), len(scenarios), 1,
+                fill=False, edgecolor="#EF5350", lw=3.5, zorder=5
+            ))
+    style_ax(ax, title="Cluster Stability Across Shock Scenarios  (red border = shift)",
+             xlabel="Shock Scenario", ylabel="Country")
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=20, ha="right", color="#C5CAD6")
+    ax.tick_params(colors="#C5CAD6")
+    show(fig)
 
 st.divider()
 
@@ -173,34 +200,55 @@ st.divider()
 
 # ── Trajectory chart ──────────────────────────────────────────────────────────
 st.markdown("### Cluster Trajectory by Country")
-st.caption("Lines show each country's cluster assignment as shock severity increases.")
+st.caption("Lines show each country's cluster assignment as shock severity increases. **Interactive:** hover to see scenario, country, and cluster.")
 
-fig, ax = dark_fig(figsize=(15, 5))
 scen_list = list(scenarios.keys())
 xp = np.arange(len(scen_list))
-for country in COUNTRIES:
-    if country in pivot.index:
-        vals = [int(pivot.loc[country, s]) for s in scen_list]
-        ax.plot(xp, vals, "o-",
-                color=BLOC_COLORS[COUNTRY_BLOC[country]],
-                lw=2, markersize=9, label=country, alpha=0.85)
-        # Annotate endpoint
-        ax.annotate(country, (xp[-1], vals[-1]),
-                    xytext=(6, 0), textcoords="offset points",
-                    fontsize=8, color=BLOC_COLORS[COUNTRY_BLOC[country]],
-                    va="center")
-ax.set_xticks(xp)
-ax.set_xticklabels(scen_list, rotation=18, ha="right", color="#C5CAD6")
-ax.set_yticks(range(1, best_k + 1))
-ax.set_yticklabels([f"Cluster {i}" for i in range(1, best_k + 1)], color="#C5CAD6")
-style_ax(ax, title="Cluster Trajectory Under Progressive Shock Severity",
-         ylabel="Cluster Assignment")
-import matplotlib.patches as mpatches
-bloc_patches = [mpatches.Patch(color=v, label=k) for k, v in BLOC_COLORS.items()]
-ax.legend(handles=bloc_patches, fontsize=9, ncol=3,
-          facecolor="#13151F", edgecolor="#1E2235", labelcolor="white",
-          loc="upper right")
-show(fig)
+if go is not None:
+    fig_ply = go.Figure()
+    for country in COUNTRIES:
+        if country in pivot.index:
+            vals = [int(pivot.loc[country, s]) for s in scen_list]
+            color = BLOC_COLORS[COUNTRY_BLOC[country]]
+            fig_ply.add_trace(go.Scatter(
+                x=scen_list, y=vals, mode="lines+markers+text", name=country,
+                line=dict(color=color, width=2), marker=dict(size=10),
+                text=[country if i == len(scen_list) - 1 else "" for i in range(len(scen_list))],
+                textposition="middle right", textfont=dict(size=9, color=color),
+                customdata=[country] * len(scen_list),
+                hovertemplate="Country: %{customdata}<br>Scenario: %{x}<br>Cluster: %{y}<extra></extra>"))
+    fig_ply.update_layout(title="Cluster Trajectory Under Progressive Shock Severity",
+                          xaxis_title="Shock Scenario", yaxis_title="Cluster Assignment",
+                          yaxis=dict(tickmode="array", tickvals=list(range(1, best_k + 1)),
+                                     ticktext=[f"Cluster {i}" for i in range(1, best_k + 1)]),
+                          paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                          xaxis=dict(tickangle=-18), margin=dict(t=50),
+                          legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    show_plotly(fig_ply)
+else:
+    import matplotlib.patches as mpatches
+    fig, ax = dark_fig(figsize=(15, 5))
+    for country in COUNTRIES:
+        if country in pivot.index:
+            vals = [int(pivot.loc[country, s]) for s in scen_list]
+            ax.plot(xp, vals, "o-",
+                    color=BLOC_COLORS[COUNTRY_BLOC[country]],
+                    lw=2, markersize=9, label=country, alpha=0.85)
+            ax.annotate(country, (xp[-1], vals[-1]),
+                        xytext=(6, 0), textcoords="offset points",
+                        fontsize=8, color=BLOC_COLORS[COUNTRY_BLOC[country]],
+                        va="center")
+    ax.set_xticks(xp)
+    ax.set_xticklabels(scen_list, rotation=18, ha="right", color="#C5CAD6")
+    ax.set_yticks(range(1, best_k + 1))
+    ax.set_yticklabels([f"Cluster {i}" for i in range(1, best_k + 1)], color="#C5CAD6")
+    style_ax(ax, title="Cluster Trajectory Under Progressive Shock Severity",
+             ylabel="Cluster Assignment")
+    bloc_patches = [mpatches.Patch(color=v, label=k) for k, v in BLOC_COLORS.items()]
+    ax.legend(handles=bloc_patches, fontsize=9, ncol=3,
+              facecolor="#13151F", edgecolor="#1E2235", labelcolor="white",
+              loc="upper right")
+    show(fig)
 
 # ── Cluster membership change analysis ───────────────────────────────────────
 st.divider()
@@ -222,19 +270,34 @@ flow_df = pd.DataFrame(flow_rows)
 st.dataframe(flow_df, use_container_width=True, hide_index=True)
 
 if not flow_df.empty:
-    fig, ax = dark_fig(figsize=(10, 4))
-    colors_bar = [sc_colors.get(s, "#42A5F5") for s in flow_df["Scenario"]]
-    bars = ax.bar(flow_df["Scenario"], flow_df["Countries Changed"],
-                  color=colors_bar, edgecolor="#0D0F18", width=0.55)
-    for bar, v in zip(bars, flow_df["Countries Changed"]):
-        ax.text(bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.05,
-                f"{v} countries", ha="center", va="bottom",
-                color="white", fontsize=9, fontweight="bold")
-    style_ax(ax, title="Number of Countries Changing Cluster vs Baseline",
-             xlabel="Shock Scenario", ylabel="# Countries Shifted")
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=15, ha="right", color="#C5CAD6")
-    show(fig)
+    st.caption("**Interactive:** hover to see scenario and number of countries shifted.")
+    if go is not None:
+        colors_bar = [sc_colors.get(s, "#42A5F5") for s in flow_df["Scenario"]]
+        fig_ply = go.Figure(data=go.Bar(
+            x=flow_df["Scenario"], y=flow_df["Countries Changed"],
+            marker_color=colors_bar,
+            text=[f"{v} countries" for v in flow_df["Countries Changed"]],
+            textposition="outside", textfont=dict(color="white", size=10, family="bold"),
+            hovertemplate="Scenario: %{x}<br>Countries shifted: %{y}<extra></extra>"))
+        fig_ply.update_layout(title="Number of Countries Changing Cluster vs Baseline",
+                             xaxis_title="Shock Scenario", yaxis_title="# Countries Shifted",
+                             paper_bgcolor="#0D0F18", plot_bgcolor="#13151F", font=dict(color="#E8EAF0"),
+                             xaxis=dict(tickangle=-15), margin=dict(t=50))
+        show_plotly(fig_ply)
+    else:
+        fig, ax = dark_fig(figsize=(10, 4))
+        colors_bar = [sc_colors.get(s, "#42A5F5") for s in flow_df["Scenario"]]
+        bars = ax.bar(flow_df["Scenario"], flow_df["Countries Changed"],
+                      color=colors_bar, edgecolor="#0D0F18", width=0.55)
+        for bar, v in zip(bars, flow_df["Countries Changed"]):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.05,
+                    f"{v} countries", ha="center", va="bottom",
+                    color="white", fontsize=9, fontweight="bold")
+        style_ax(ax, title="Number of Countries Changing Cluster vs Baseline",
+                 xlabel="Shock Scenario", ylabel="# Countries Shifted")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=15, ha="right", color="#C5CAD6")
+        show(fig)
 
 # ── Research Implications ─────────────────────────────────────────────────────
 st.divider()
