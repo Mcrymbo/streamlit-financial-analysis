@@ -10,12 +10,12 @@ from sklearn.preprocessing import StandardScaler
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 COUNTRIES = [
     "Kenya", "Uganda", "Tanzania",
-    "Nigeria", "Ghana", "Senegal",
+    "Cote d'Ivoire", "Ghana", "Senegal",
     "South Africa", "Zambia", "Zimbabwe"
 ]
 BLOCS = {
     "EAC":    ["Kenya", "Uganda", "Tanzania"],
-    "ECOWAS": ["Nigeria", "Ghana", "Senegal"],
+    "ECOWAS": ["Cote d'Ivoire", "Ghana", "Senegal"],
     "SADC":   ["South Africa", "Zambia", "Zimbabwe"],
 }
 COUNTRY_BLOC = {c: b for b, cs in BLOCS.items() for c in cs}

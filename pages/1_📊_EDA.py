@@ -56,12 +56,16 @@ with t1:
                bbox_to_anchor=(0.5, -0.03))
     show(fig)
 
-    # Descriptive stats for trade
+    # Descriptive stats for trade (exclude countries with no valid trade data)
     st.markdown("**Trade Volume Summary Statistics**")
     ts = dfe.groupby("Country Name")[TARGET].agg(
         Mean="mean", Std="std", Min="min", Max="max", Median="median"
     ).round(2)
+    ts = ts.dropna(how="all")  # omit countries with no trade data (e.g. if source had none)
     st.dataframe(ts, use_container_width=True)
+    st.caption(
+        "ECOWAS uses Côte d'Ivoire (Nigeria has no Trade % of GDP in World Bank source for 1970–2024)."
+    )
 
 # ── Tab 2: Inflation ──────────────────────────────────────────────────────────
 with t2:
